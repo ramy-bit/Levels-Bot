@@ -49,7 +49,7 @@ async def on_ready():
     print(f'Logged in as {bot.user}')
 
 @bot.command()
-async def levels(ctx, ticker: str):
+async def ladder(ctx, ticker: str):
     ticker = ticker.strip().upper()
     if ticker not in ladder_memory:
         await ctx.send(f"⚠️ No levels for **{ticker}**. Please trigger TradingView alert.")
