@@ -1,5 +1,6 @@
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands
 from flask import Flask, request
 from threading import Thread
@@ -10,7 +11,7 @@ import logging
 TOKEN = os.environ['DISCORD_TOKEN']
 ladder_memory = {}
 
-# --- WEB SERVER ---
+# --- WEB SERVER (TradingView Receiver) ---
 app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -25,8 +26,9 @@ def webhook():
         data = request.json
         ticker = data.get('ticker', 'UNKNOWN').strip().upper()
         raw_levels = data.get('levels', '')
+        # Convert "490, 495" -> [490.0, 495.0]
         level_list = sorted([float(x.strip()) for x in raw_levels.split(',') if x.strip()])
-
+        
         ladder_memory[ticker] = level_list
         print(f"✅ UPDATED: {ticker} -> {level_list}")
         return "Success", 200
@@ -35,46 +37,74 @@ def webhook():
         return "Error", 400
 
 def run_server():
-    # Render assigns a random port, we must read it from Environment
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- DISCORD BOT ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+# --- DISCORD BOT (Slash Commands) ---
+class LevelBot(commands.Bot):
+    def __init__(self):
+        # We don't need a prefix for slash commands, but we set one anyway
+        super().__init__(command_prefix='!', intents=discord.Intents.default())
 
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user}')
+    async def setup_hook(self):
+        # This syncs the slash commands with Discord when the bot starts
+        await self.tree.sync()
+        print("Synced slash commands!")
 
-@bot.command()
-async def ladder(ctx, ticker: str):
+bot = LevelBot()
+
+# --- AUTOCOMPLETE FUNCTION ---
+# This creates the dropdown list based on what is in memory
+async def ticker_autocomplete(interaction: discord.Interaction, current: str):
+    tickers = list(ladder_memory.keys())
+    return [
+        app_commands.Choice(name=ticker, value=ticker)
+        for ticker in tickers if current.lower() in ticker.lower()
+    ][:25] # Limit to 25 choices
+
+# --- COMMAND: /LADDER ---
+@bot.tree.command(name="ladder", description="Get support/resistance levels for a stock")
+@app_commands.autocomplete(ticker=ticker_autocomplete)
+async def ladder(interaction: discord.Interaction, ticker: str):
     ticker = ticker.strip().upper()
+    
+    # 1. Acknowledge (Show "Thinking...") so the bot doesn't time out
+    await interaction.response.defer()
+
+    # 2. Check Memory
     if ticker not in ladder_memory:
-        await ctx.send(f"⚠️ No levels for **{ticker}**. Please trigger TradingView alert.")
+        await interaction.followup.send(f"⚠️ I don't have levels for **{ticker}** yet. Please trigger the TradingView alert.")
         return
 
-    msg = await ctx.send(f"🔄 Checking {ticker}...")
-    y_ticker = f"{ticker}-USD" if ticker in ['BTC', 'ETH', 'SOL'] else ticker
-
+    # 3. Get Price
+    y_ticker = f"{ticker}-USD" if ticker in ['BTC', 'ETH', 'SOL', 'XRP'] else ticker
     try:
         current_price = yf.Ticker(y_ticker).fast_info['last_price']
     except:
-        await msg.edit(content="❌ Error fetching price.")
+        await interaction.followup.send(f"❌ Could not fetch price for {ticker}.")
         return
 
+    # 4. Logic
     levels = ladder_memory[ticker]
     supports = sorted([x for x in levels if x < current_price], reverse=True)[:3]
     resistances = sorted([x for x in levels if x > current_price])[:3]
 
+    # 5. Reply
     embed = discord.Embed(title=f"Levels for {ticker}", color=0x2b2d31)
     embed.description = f"**Price:** `{current_price:,.2f}`"
     embed.add_field(name="🔴 Resistance", value="\n".join([f"`{r:,.2f}`" for r in resistances]) or "-", inline=True)
     embed.add_field(name="🟢 Support", value="\n".join([f"`{s:,.2f}`" for s in supports]) or "-", inline=True)
+    
+    await interaction.followup.send(embed=embed)
 
-    await msg.delete()
-    await ctx.send(embed=embed)
+# --- COMMAND: /SHOW_LIST ---
+@bot.tree.command(name="show_list", description="See all tickers currently stored in memory")
+async def show_list(interaction: discord.Interaction):
+    if not ladder_memory:
+        await interaction.response.send_message("📭 Memory is empty.")
+    else:
+        keys = ", ".join(ladder_memory.keys())
+        await interaction.response.send_message(f"**Tracked Tickers:** {keys}")
 
 if __name__ == '__main__':
     Thread(target=run_server).start()
