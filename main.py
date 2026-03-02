@@ -2,6 +2,7 @@ import os
 import discord
 from discord.ext import commands, tasks
 import yfinance as yf
+import pandas as pd
 import asyncio
 from threading import Thread
 from flask import Flask
@@ -22,8 +23,6 @@ WATCHLIST = [
 app = Flask(__name__)
 @app.route('/')
 def home(): return "OK", 200
-@app.route('/webhook', methods=['POST'])
-def webhook(): return "OK", 200
 
 def run_server():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
@@ -33,7 +32,6 @@ intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- THE MATH ENGINE ---
 def analyze_stock(ticker):
     try:
         data = yf.Ticker(ticker).history(period="1y", interval="1d")
@@ -58,46 +56,16 @@ def analyze_stock(ticker):
     except Exception:
         return None
 
-# --- EVENTS ---
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    try:
-        await bot.tree.sync()
-        print("✅ Slash commands re-enabled and synced successfully!")
-    except Exception as e:
-        print(f"⚠️ Could not sync slash commands: {e}")
-        
+    await bot.tree.sync()
+    print("✅ Slash commands synced to fresh bot!")
     if not market_scanner.is_running():
         market_scanner.start()
 
-# 🕵️‍♂️ THE TRACKER: This prints every message the bot sees to Render
-@bot.event
-async def on_message(message):
-    if message.author == bot.user: return
-    print(f"👀 Bot saw a message: {message.content}")
-    await bot.process_commands(message)
-
-# --- COMMANDS ---
-@bot.command(name="scan")
-async def text_scan(ctx):
-    print("🚀 Executing !scan...")
-    await ctx.send("🕵️‍♂️ **Scanning the watchlist...** This will take about a minute.")
-    found = 0
-    for ticker in WATCHLIST:
-        res = analyze_stock(ticker)
-        if res:
-            found += 1
-            embed = discord.Embed(title=f"🚨 {ticker} Buy Signal (Daily)", color=0x00FF00, description=f"**Price:** `${res['price']:,.2f}`")
-            embed.add_field(name="🛑 Resistance", value=f"`${res['r1']:,.2f}`")
-            embed.add_field(name="🟢 Support", value=f"`${res['s1']:,.2f}`")
-            await ctx.send(embed=embed)
-        await asyncio.sleep(2)
-    await ctx.send(f"✅ Scan complete. Found {found} setups!" if found else "✅ Scan complete. No new alignments today.")
-
 @bot.tree.command(name="scan", description="Scan the market for SMA alignments")
 async def slash_scan(interaction: discord.Interaction):
-    print("🚀 Executing /scan...")
     await interaction.response.defer()
     found = 0
     for ticker in WATCHLIST:
@@ -111,7 +79,21 @@ async def slash_scan(interaction: discord.Interaction):
         await asyncio.sleep(2)
     await interaction.followup.send(f"✅ Scan complete. Found {found} setups!" if found else "✅ Scan complete. No new alignments today.")
 
-# --- BACKGROUND SCANNER ---
+@bot.command(name="scan")
+async def text_scan(ctx):
+    await ctx.send("🕵️‍♂️ **Scanning the watchlist...** This will take about a minute.")
+    found = 0
+    for ticker in WATCHLIST:
+        res = analyze_stock(ticker)
+        if res:
+            found += 1
+            embed = discord.Embed(title=f"🚨 {ticker} Buy Signal (Daily)", color=0x00FF00, description=f"**Price:** `${res['price']:,.2f}`")
+            embed.add_field(name="🛑 Resistance", value=f"`${res['r1']:,.2f}`")
+            embed.add_field(name="🟢 Support", value=f"`${res['s1']:,.2f}`")
+            await ctx.send(embed=embed)
+        await asyncio.sleep(2)
+    await ctx.send(f"✅ Scan complete. Found {found} setups!" if found else "✅ Scan complete. No new alignments today.")
+
 @tasks.loop(hours=4)
 async def market_scanner():
     channel = bot.get_channel(CHANNEL_ID)
