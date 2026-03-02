@@ -4,8 +4,8 @@ from discord.ext import commands, tasks
 import yfinance as yf
 import pandas as pd
 from threading import Thread
-from flask import Flask
-import asyncio  # <--- Added this
+from flask import Flask, request
+import asyncio
 
 # --- CONFIG ---
 TOKEN = os.environ.get('DISCORD_TOKEN')
@@ -27,6 +27,12 @@ app = Flask(__name__)
 def home():
     return "Scanner is running!", 200
 
+# ⚠️ THE TRADINGVIEW FIX
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    # This catches your old TradingView alerts so they don't cause 404 errors!
+    return "Webhook ignored (Standalone mode active)", 200
+
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
@@ -34,6 +40,7 @@ def run_server():
 # --- DISCORD BOT ---
 class ScannerBot(commands.Bot):
     def __init__(self):
+        # We are adding "!" as a backup command prefix
         super().__init__(command_prefix='!', intents=discord.Intents.default())
 
     async def setup_hook(self):
@@ -99,14 +106,37 @@ async def market_scanner():
             embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
             await channel.send(embed=embed)
         
-        # ⚠️ THE FIX: Wait 2 seconds before checking the next stock to avoid Cloudflare ban
         await asyncio.sleep(2) 
 
 @market_scanner.before_loop
 async def before_scanner():
     await bot.wait_until_ready()
 
-# --- MANUAL COMMAND ---
+
+# --- THE NEW TEXT COMMAND (Foolproof Backup) ---
+@bot.command(name="scan")
+async def text_scan(ctx):
+    await ctx.send("🕵️‍♂️ **Scanning the watchlist...** This will take about a minute.")
+    found_signals = 0
+    
+    for ticker in WATCHLIST:
+        result = analyze_stock(ticker)
+        if result:
+            found_signals += 1
+            embed = discord.Embed(title=f"🚨 {ticker} Buy Signal (Daily)", color=0x00FF00)
+            embed.description = f"**SMA Alignment Confirmed** (9 > 21 > 50 > 200)\n**Price:** `${result['price']:,.2f}`"
+            embed.add_field(name="🛑 Resistance", value=f"`${result['r1']:,.2f}`", inline=True)
+            embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
+            await ctx.send(embed=embed)
+            
+        await asyncio.sleep(2)
+            
+    if found_signals == 0:
+        await ctx.send("✅ Scan complete. No new alignments today.")
+    else:
+        await ctx.send(f"✅ Scan complete. Found {found_signals} setups!")
+
+# --- ORIGINAL SLASH COMMAND ---
 @bot.tree.command(name="scan_now", description="Force the bot to scan the watchlist")
 async def scan_now(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -123,7 +153,6 @@ async def scan_now(interaction: discord.Interaction):
             embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
             await channel.send(embed=embed)
             
-        # ⚠️ THE FIX: Wait 2 seconds here too
         await asyncio.sleep(2)
             
     if found_signals == 0:
