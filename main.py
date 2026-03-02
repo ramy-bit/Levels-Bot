@@ -27,7 +27,7 @@ app = Flask(__name__)
 def home():
     return "Scanner is running!", 200
 
-# ⚠️ THE TRADINGVIEW FIX (Stops the 404 errors)
+# Catch TradingView signals to prevent errors
 @app.route('/webhook', methods=['POST'])
 def webhook():
     return "Webhook ignored (Standalone mode active)", 200
@@ -39,10 +39,12 @@ def run_server():
 # --- DISCORD BOT ---
 class ScannerBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix='!', intents=discord.Intents.default())
+        # ⚠️ THE FIX: This forces the bot to put its reading glasses on!
+        intents = discord.Intents.default()
+        intents.message_content = True 
+        super().__init__(command_prefix='!', intents=intents)
 
     async def setup_hook(self):
-        # ⚠️ THE DISCORD BAN FIX: We removed the "sync" line so Discord stops blocking your IP!
         print("✅ Bot connected safely (Sync bypassed to prevent Cloudflare ban)!")
         self.market_scanner.start()
 
@@ -86,7 +88,7 @@ def analyze_stock(ticker):
         print(f"Error scanning {ticker}: {e}")
         return None
 
-# --- BACKGROUND SCANNER ---
+# --- BACKGROUND SCANNER (Runs every 4 hours automatically) ---
 @tasks.loop(hours=4)
 async def market_scanner():
     channel = bot.get_channel(CHANNEL_ID)
@@ -104,14 +106,13 @@ async def market_scanner():
             embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
             await channel.send(embed=embed)
         
-        # ⚠️ THE YAHOO FINANCE FIX: Wait 2 seconds between stocks
         await asyncio.sleep(2) 
 
 @market_scanner.before_loop
 async def before_scanner():
     await bot.wait_until_ready()
 
-# --- THE TEXT COMMAND (Foolproof Backup) ---
+# --- THE TEXT COMMAND (Simple for any user) ---
 @bot.command(name="scan")
 async def text_scan(ctx):
     await ctx.send("🕵️‍♂️ **Scanning the watchlist...** This will take about a minute.")
@@ -127,36 +128,12 @@ async def text_scan(ctx):
             embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
             await ctx.send(embed=embed)
             
-        await asyncio.sleep(2)
+        await asyncio.sleep(2) # Protects against Yahoo Finance bans
             
     if found_signals == 0:
         await ctx.send("✅ Scan complete. No new alignments today.")
     else:
         await ctx.send(f"✅ Scan complete. Found {found_signals} setups!")
-
-# --- ORIGINAL SLASH COMMAND ---
-@bot.tree.command(name="scan_now", description="Force the bot to scan the watchlist")
-async def scan_now(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    found_signals = 0
-    channel = bot.get_channel(CHANNEL_ID)
-    
-    for ticker in WATCHLIST:
-        result = analyze_stock(ticker)
-        if result:
-            found_signals += 1
-            embed = discord.Embed(title=f"🚨 {ticker} Buy Signal (Daily)", color=0x00FF00)
-            embed.description = f"**SMA Alignment Confirmed** (9 > 21 > 50 > 200)\n**Price:** `${result['price']:,.2f}`"
-            embed.add_field(name="🛑 Resistance", value=f"`${result['r1']:,.2f}`", inline=True)
-            embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
-            await channel.send(embed=embed)
-            
-        await asyncio.sleep(2)
-            
-    if found_signals == 0:
-        await interaction.followup.send("✅ Scan complete. No new alignments today.")
-    else:
-        await interaction.followup.send(f"✅ Scan complete. Found {found_signals} setups!")
 
 if __name__ == '__main__':
     Thread(target=run_server).start()
