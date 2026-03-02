@@ -27,10 +27,9 @@ app = Flask(__name__)
 def home():
     return "Scanner is running!", 200
 
-# ⚠️ THE TRADINGVIEW FIX
+# ⚠️ THE TRADINGVIEW FIX (Stops the 404 errors)
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # This catches your old TradingView alerts so they don't cause 404 errors!
     return "Webhook ignored (Standalone mode active)", 200
 
 def run_server():
@@ -40,12 +39,11 @@ def run_server():
 # --- DISCORD BOT ---
 class ScannerBot(commands.Bot):
     def __init__(self):
-        # We are adding "!" as a backup command prefix
         super().__init__(command_prefix='!', intents=discord.Intents.default())
 
     async def setup_hook(self):
-        await self.tree.sync()
-        print("✅ Slash commands synced!")
+        # ⚠️ THE DISCORD BAN FIX: We removed the "sync" line so Discord stops blocking your IP!
+        print("✅ Bot connected safely (Sync bypassed to prevent Cloudflare ban)!")
         self.market_scanner.start()
 
 bot = ScannerBot()
@@ -106,14 +104,14 @@ async def market_scanner():
             embed.add_field(name="🟢 Support", value=f"`${result['s1']:,.2f}`", inline=True)
             await channel.send(embed=embed)
         
+        # ⚠️ THE YAHOO FINANCE FIX: Wait 2 seconds between stocks
         await asyncio.sleep(2) 
 
 @market_scanner.before_loop
 async def before_scanner():
     await bot.wait_until_ready()
 
-
-# --- THE NEW TEXT COMMAND (Foolproof Backup) ---
+# --- THE TEXT COMMAND (Foolproof Backup) ---
 @bot.command(name="scan")
 async def text_scan(ctx):
     await ctx.send("🕵️‍♂️ **Scanning the watchlist...** This will take about a minute.")
